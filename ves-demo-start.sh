@@ -14,7 +14,7 @@
 #this is new comment
 
 #Port allotment on host system for the micro services running in docker.
-
+#adding this for testing
 #influx port 3330
 #grafana port 8880
 #kafka port 9091
