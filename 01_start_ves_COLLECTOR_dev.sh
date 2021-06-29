@@ -15,4 +15,4 @@ echo  -e "======================================================================
 
 #Start collector script, service port is 9999
 
-python3 /home/ves-dev/ves-dev/collector/ves/evel-test-collector/code/collector/monitor.py --config /home/ves-dev/ves-dev/collector/ves/evel-test-collector/config/collector.conf --influxdb $infuxdb_host:$influxdb_port --section default > /home/ves-dev/ves-dev/monitor.log 2>&1
+python3 /home/ves-dev/ves-dev/collector/evel-test-collector/code/collector/monitor.py --config /home/ves-dev/ves-dev/collector/evel-test-collector/config/collector.conf --influxdb $infuxdb_host:$influxdb_port --section default > /home/ves-dev/ves-dev/monitor.log 2>&1

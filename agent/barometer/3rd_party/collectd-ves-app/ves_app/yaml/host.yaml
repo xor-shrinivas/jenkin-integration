@@ -1,7 +1,7 @@
 ---
 # Common event header definition (required fields and defaults)
 commonEventHeader: &commonEventHeader
-  domain: N/A
+  domain: "measurement"
   eventId: "{system.id}"
   eventName: ""
   eventType: Info
@@ -12,8 +12,9 @@ commonEventHeader: &commonEventHeader
   sequence: 0
   sourceName: N/A
   startEpochMicrosec: 0
-  version: 2.0
-
+  version: "4.0"
+  vesEventListenerVersion: "7.2.1"
+  
 # Host measurements definition
 Host Measurements: !Measurements
   - ITEM-DESC:
@@ -21,33 +22,33 @@ Host Measurements: !Measurements
         commonEventHeader: &hostCommonEventHeader
           <<: *commonEventHeader
           eventType: platform
-          domain: measurementsForVfScaling
+          domain: measurement
           sourceId: &sourceId "{vl.host}"
           sourceName: *sourceId
           startEpochMicrosec: !Number "{vl.time}"
-        measurementsForVfScalingFields: &hostMeasurementsForVfScalingFields
-          measurementsForVfScalingVersion: 2.0
-          additionalMeasurements: !ArrayItem
+        measurementFields: &hostMeasurementFields
+          measurementFieldsVersion: "4.0"
+          measurementInterval: !Number "{vl.interval}"
+          loadArray: !ArrayItem
             - SELECT:
                 host: "{vl.host}"
-                plugin: "/^(?!memory|cpu|interface|disk).*$/"
-            - INDEX-KEY:
-                - host
-                - plugin
-                - plugin_instance
-                - time
+                plugin: load
+                type: load
+                ds_name: midterm         
             - ITEM-DESC:
-                name: !StripExtraDash "{vl.plugin}-{vl.plugin_instance}"
-                arrayOfFields: !ArrayItem
+                midTerm : !Number "{vl.value}"
+                shortTerm : !ValueItem
                   - SELECT:
                       host: "{vl.host}"
-                      plugin: "{vl.plugin}"
-                      plugin_instance: "{vl.plugin_instance}"
-                  - ITEM-DESC:
-                      name: !StripExtraDash "{vl.type}-{vl.type_instance}-{vl.ds_name}"
-                      value: "{vl.value}"                      
-                eventTime: "{vl.time}"
-          measurementInterval: !Number "{vl.interval}"
+                      plugin: load
+                      type: load
+                      ds_name: shortterm
+                longTerm : !ValueItem
+                  - SELECT:
+                      host: "{vl.host}"
+                      plugin: load
+                      type: load
+                      ds_name: longterm
           memoryUsageArray: !ArrayItem
             - SELECT:
                 host: "{vl.host}"
@@ -56,7 +57,6 @@ Host Measurements: !Measurements
                 type_instance: free
             - ITEM-DESC:
                 vmIdentifier: "{vl.host}"
-                eventTime: "{vl.time}"
                 memoryFree: !Number "{vl.value}"
                 memoryUsed: !ValueItem
                   - SELECT:
@@ -103,7 +103,6 @@ Host Measurements: !Measurements
                 type_instance: idle
             - ITEM-DESC:
                 cpuIdentifier: "{vl.plugin_instance}"
-                eventTime: "{vl.time}"
                 cpuIdle: !Number "{vl.value}"
                 percentUsage: 0.0
                 cpuUsageUser: !ValueItem
@@ -155,7 +154,7 @@ Host Measurements: !Measurements
                       plugin_instance: "{vl.plugin_instance}"
                       type: percent
                       type_instance: system
-          vNicPerformanceArray: !ArrayItem
+          nicPerformanceArray: !ArrayItem
             - SELECT:
                 host: "{vl.host}"
                 plugin: interface
@@ -163,8 +162,7 @@ Host Measurements: !Measurements
                 ds_name: rx
             - ITEM-DESC:
                 valuesAreSuspect: "true"
-                vNicIdentifier: "{vl.plugin_instance}"
-                eventTime: "{vl.time}"
+                nicIdentifier: "{vl.plugin_instance}"
                 receivedTotalPacketsAccumulated: !Number "{vl.value}"
                 transmittedTotalPacketsAccumulated: !ValueItem
                   - SELECT:
@@ -223,7 +221,6 @@ Host Measurements: !Measurements
                 ds_name: read
             - ITEM-DESC:
                 diskIdentifier: "{vl.plugin_instance}"
-                eventTime: "{vl.time}"
                 diskOctetsReadLast: !Number "{vl.value}"
                 diskOctetsWriteLast: !ValueItem
                   - SELECT:

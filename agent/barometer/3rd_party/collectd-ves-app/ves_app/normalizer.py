@@ -455,7 +455,7 @@ class Number(yaml.YAMLObject):
         try:
             return int(node.value)
         except ValueError:
-            return node.value
+            return float(node.value)
 
 
 class StripExtraDash(yaml.YAMLObject):

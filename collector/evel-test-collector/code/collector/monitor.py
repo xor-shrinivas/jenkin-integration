@@ -34,8 +34,11 @@ import json
 import jsonschema
 from functools import partial
 import requests
+from datetime import datetime, date, time
+from elasticsearch import Elasticsearch
 import calendar
-from datetime import datetime
+import datetime
+import time
 import tzlocal
 import pytz
 
@@ -111,7 +114,7 @@ def listener(environ, start_response, schema):
 
     '''
     logger.info('Got a Vendor Event request')
-    logger.info('======== {} ============='.format(datetime.fromtimestamp(time.time()).strftime('%Y-%m-%d %H:%M:%S')))
+    logger.info('==== ' + time.asctime() + ' ' + '=' * 49)
 
     #--------------------------------------------------------------------------
     # Extract the content from the request.
@@ -123,15 +126,12 @@ def listener(environ, start_response, schema):
 
     mode, b64_credentials = str.split(environ.get('HTTP_AUTHORIZATION',
                                                      'None None'))
-    # logger.debug('Auth. Mode: {0} Credentials: {1}'.format(mode,
-    #                                                     b64_credentials))
     logger.debug('Auth. Mode: {0} Credentials: ****'.format(mode))
     if (b64_credentials != 'None'):
         credentials = b64decode(b64_credentials)
     else:
         credentials = None
 
-    # logger.debug('Credentials: {0}'.format(credentials))
     logger.debug('Credentials: ****')
 
     #--------------------------------------------------------------------------
@@ -144,7 +144,7 @@ def listener(environ, start_response, schema):
             decoded_body = json.loads(body)
             jsonschema.validate(decoded_body, schema)
             logger.info('Event is valid!')
-            print('Valid body decoded & checked against schema OK:\n'
+            logger.info('Valid body decoded & checked against schema OK:\n'
                   '{0}'.format(json.dumps(decoded_body,
                                           sort_keys=True,
                                           indent=4,
@@ -160,20 +160,19 @@ def listener(environ, start_response, schema):
         # testControl API, send it in response.
         #----------------------------------------------------------------------
                 global pending_command_list
-                temp = ''
                 if pending_command_list is not None:
                     start_response('202 Accepted',
                            [('Content-type', 'application/json')])
                     response = pending_command_list
                     pending_command_list = None
 
-                    print('\n'+ '='*80)
-                    print('Sending pending commandList in the response:\n'
+                    logger.debug('\n'+ '='*80)
+                    logger.debug('Sending pending commandList in the response:\n'
                           '{0}'.format(json.dumps(response,
                                           sort_keys=True,
                                           indent=4,
                                           separators=(',', ': '))))
-                    print('='*80 + '\n')
+                    logger.debug('='*80 + '\n')
                     yield json.dumps(response).encode()
                 else:
                     start_response('202 Accepted', [])
@@ -181,7 +180,7 @@ def listener(environ, start_response, schema):
             else:
                 logger.warn('Failed to authenticate OK; creds: ' +  credentials)
                 logger.warn('Failed to authenticate agent credentials: ', credentials, 
-		             'against expected ', vel_username, ':', vel_password)
+                            'against expected ', vel_username, ':', vel_password)
 
         #----------------------------------------------------------------------
         # Respond to the caller.
@@ -197,23 +196,21 @@ def listener(environ, start_response, schema):
                     }
                 yield json.dumps(req_error)
 
-            print("data_storage " + data_storage)
-            if(data_storage == 'influxdb'): 
-                save_event_in_db(body)
-            elif(data_storage == 'elasticsearch'):
-                save_event_in_elasticsearch(body)
-            elif(data_storage == 'both'):
-                save_event_in_db(body)
-                save_event_in_elasticsearch(body)
+            logger.info("data_storage ={}".format(data_storage))
+            if(data_storage == 'influxdb'):
+              save_event_in_db(body)
+            elif(data_storage == 'elasticsearch'): 
+              save_event_in_elasticsearch(body)
+            elif(data_storage == 'both'): 
+              save_event_in_db(body)
+              save_event_in_elasticsearch(body)
 
         except jsonschema.SchemaError as e:
             logger.error('Schema is not valid! {0}'.format(e))
-            print('Schema is not valid! {0}'.format(e))
 
         except jsonschema.ValidationError as e:
             logger.warn('Event is not valid against schema! {0}'.format(e))
-            print('Event is not valid against schema! {0}'.format(e))
-            print('Bad JSON body decoded:\n'
+            logger.warn('Bad JSON body decoded:\n'
                   '{0}'.format(json.dumps(decoded_body,
                                          sort_keys=True,
                                          indent=4,
@@ -221,356 +218,292 @@ def listener(environ, start_response, schema):
 
         except Exception as e:
             logger.error('Event invalid for unexpected reason! {0}'.format(e))
-            print('Schema is not valid for unexpected reason! {0}'.format(e))
     else:
         logger.debug('No schema so just decode JSON: {0}'.format(body))
         try:
             decoded_body = json.loads(body)
-            print('Valid JSON body (no schema checking) decoded:\n'
+            logger.warn('Valid JSON body (no schema checking) decoded:\n'
                   '{0}'.format(json.dumps(decoded_body,
                                          sort_keys=True,
                                          indent=4,
                                          separators=(',', ': '))))
-            logger.info('Event is valid JSON but not checked against schema!')
+            logger.warn('Event is valid JSON but not checked against schema!')
 
         except Exception as e:
             logger.error('Event invalid for unexpected reason! {0}'.format(e))
-            print('JSON body not valid for unexpected reason! {0}'.format(e))
 
 
 #--------------------------------------------------------------------------
 # Send event to influxdb
 #--------------------------------------------------------------------------
 def send_to_influxdb(event,pdata):
-  url = 'http://{}/write?db=veseventsdb'.format(influxdb)
-  print('Send {} to influxdb at {}: {}'.format(event,influxdb,pdata))
-  r = requests.post(url, data=pdata, headers={'Content-Type': 'text/plain'})
-  print('influxdb return code {}'.format(r.status_code))
-  if r.status_code != 204:
-    print('*** Influxdb save failed, return code {} ***'.format(r.status_code))
+    url = 'http://{}/write?db=veseventsdb'.format(influxdb)
+    logger.info('Send {} to influxdb at {}: {}'.format(event,influxdb,pdata))
+    r = requests.post(url, data=pdata, headers={'Content-Type': 'text/plain'})
+    logger.info('influxdb return code {}'.format(r.status_code))
+    if r.status_code != 204:
+        logger.debug('*** Influxdb save failed, return code {} ***'.format(r.status_code))
 
+
+#--------------------------------------------------------------------------
+# Save event data in Elasticsearch
+#--------------------------------------------------------------------------
+def save_event_in_elasticsearch(body):
+    jobj = json.loads(body)
+
+    if 'commonEventHeader' in jobj['event']:
+        logger.debug('Found commonEventHeader')
+
+    eventid = jobj['event']['commonEventHeader']['eventId']  
+    es = Elasticsearch([{'host': 'localhost', 'port': 9200}])
+
+    if 'additionalMeasurements' in jobj['event']['measurementsForVfScalingFields']:
+        for addmeasure in jobj['event']['measurementsForVfScalingFields']['additionalMeasurements']:
+            addmeasure['eventTime'] = datetime.datetime.utcfromtimestamp(float(addmeasure['eventTime']))
+            es.index(index=addmeasure['name'].lower(), doc_type='_doc', id=eventid, body=addmeasure)
+
+    if 'cpuUsageArray' in jobj['event']['measurementsForVfScalingFields']:     
+        for cpu in jobj['event']['measurementsForVfScalingFields']['cpuUsageArray']:
+            cpu['eventTime'] = datetime.datetime.utcfromtimestamp(float(cpu['eventTime']))
+            es.index(index='cpuusage', doc_type='_doc', id=eventid + "-" + cpu['cpuIdentifier'],  body=cpu)
+
+    if 'diskUsageArray' in jobj['event']['measurementsForVfScalingFields']:  
+        for disk in jobj['event']['measurementsForVfScalingFields']['diskUsageArray']:
+            disk['eventTime'] = datetime.datetime.utcfromtimestamp(float(disk['eventTime']))
+            es.index(index='diskusage', doc_type='_doc', id=eventid + "-" + disk['diskIdentifier'], body=disk)  
+
+    if 'vNicPerformanceArray' in jobj['event']['measurementsForVfScalingFields']:
+        for vnic in jobj['event']['measurementsForVfScalingFields']['vNicPerformanceArray']:
+            vnic['eventTime'] = datetime.datetime.utcfromtimestamp(float(vnic['eventTime']))
+            es.index(index='vnic', doc_type='_doc', id=eventid + "-" + vnic['vNicIdentifier'], body=vnic)  
+
+    if 'memoryUsageArray' in jobj['event']['measurementsForVfScalingFields']:
+        for memory in jobj['event']['measurementsForVfScalingFields']['memoryUsageArray']:
+            memory['eventTime'] = datetime.datetime.utcfromtimestamp(float(memory['eventTime']))
+            es.index(index='memory', doc_type='_doc', body=memory)  
+
+
+def process_additional_measurements(val, domain, eventId, startEpochMicrosec, lastEpochMicrosec):
+    for additionalMeasurements in val:
+        pdata = domain +",eventId={},system={}".format(eventId,source)
+        nonstringpdata = " startEpochMicrosec={},lastEpochMicrosec={},".format(startEpochMicrosec,lastEpochMicrosec)
+        for key,val in additionalMeasurements.items():
+            if isinstance(val, str):
+                pdata = pdata + ',{}={}'.format(key,process_special_char(val))
+            elif isinstance(val, dict):
+                for key2,val2 in val.items():
+                    if isinstance(val2, str):
+                        pdata = pdata + ',{}={}'.format(key2,process_special_char(val2))
+                    else:
+                        nonstringpdata = nonstringpdata + '{}={},'.format(key2,val2)
+            else:
+                nonstringpdata = nonstringpdata + '{}={},'.format(key,val)
+    send_to_influxdb(domain, pdata + nonstringpdata[:-1] + ' ' + process_time (eventTimestamp))
+
+def process_nonadditional_measurements(val, domain, eventId, startEpochMicrosec, lastEpochMicrosec):
+    for disk in val:
+        pdata = domain +",eventId={},system={}".format(eventId,source)
+        nonstringpdata = " startEpochMicrosec={},lastEpochMicrosec={},".format(startEpochMicrosec,lastEpochMicrosec)
+        for key,val in disk.items():
+            if isinstance(val, str):
+                pdata = pdata + ',{}={}'.format(key,process_special_char(val))
+            else:
+                nonstringpdata = nonstringpdata + '{}={},'.format(key,val)
+
+        send_to_influxdb(domain, pdata + nonstringpdata[:-1] + ' ' + process_time (eventTimestamp))
+
+def process_pnfRegistration_event(domain, jobj, pdata, nonstringpdata):
+    pdata = pdata +",system={}".format(source)
+    for key,val in jobj.items():
+        if key != 'additionalFields' and val != "" :
+            if isinstance(val, str):
+                pdata = pdata + ',{}={}'.format(key,process_special_char(val))
+            else:
+                nonstringpdata = nonstringpdata + '{}={},'.format(key,val)
+        elif key == 'additionalFields':
+            for key2,val2 in val.items():
+                if val2 != "" and isinstance(val2, str):
+                    pdata = pdata + ',{}={}'.format(key2,process_special_char(val2))
+                elif val2 != "" :
+                    nonstringpdata = nonstringpdata + '{}={},'.format(key2,val2)
+
+    send_to_influxdb(domain, pdata + nonstringpdata[:-1] + ' ' + process_time (eventTimestamp))
+
+def process_thresholdCrossingAlert_event(domain, jobj, pdata, nonstringpdata):
+    pdata = pdata +",system={}".format(source)
+    for key,val in jobj.items():
+        if (key != 'additionalFields' and key != 'additionalParameters' and key != 'associatedAlertIdList') and val != "" :
+            if isinstance(val, str):
+                pdata = pdata + ',{}={}'.format(key,process_special_char(val))
+            else:
+                nonstringpdata = nonstringpdata + '{}={},'.format(key,val)
+        elif key == 'additionalFields':
+            for key2,val2 in val.items():
+                if val2 != "" and isinstance(val2, str):
+                    pdata = pdata + ',{}={}'.format(key2,process_special_char(val2))
+                elif val2 != "" :
+                    nonstringpdata = nonstringpdata + '{}={},'.format(key2,val2)
+        elif key == 'additionalParameters':
+            for addParameter in val:
+                for key2,val2 in addParameter.items():
+                    if key2 != "hashMap" :
+                        if val2 != "" and isinstance(val2, str):
+                            pdata = pdata + ',{}={}'.format(key2,process_special_char(val2))
+                        elif val2 != "" :
+                            nonstringpdata = nonstringpdata + '{}={},'.format(key2,val2)
+                    elif key2 == "hashMap" :
+                        for key3,val3 in val2.items():
+                            if val3 != "" and isinstance(val3, str):
+                                pdata = pdata + ',{}={}'.format(key3,process_special_char(val3))
+                            elif val3 != "" :
+                                nonstringpdata = nonstringpdata + '{}={},'.format(key3,val3)
+        elif key == 'associatedAlertIdList':
+            associatedAlertIdList = ""
+            for associatedAlertId in val:
+                associatedAlertIdList = associatedAlertIdList + associatedAlertId + "|"
+                if(associatedAlertIdList != ""):
+                    pdata = pdata + ',{}={}'.format("associatedAlertIdList",process_special_char(associatedAlertIdList)[:-1])
+
+    send_to_influxdb(domain, pdata + nonstringpdata[:-1] + ' ' + process_time (eventTimestamp))
+
+def process_fault_event(domain, jobj, pdata, nonstringpdata):
+    pdata = pdata +",system={}".format(source)
+    for key,val in jobj.items():
+        if key != 'alarmAdditionalInformation' and val != "" :
+            if isinstance(val, str):
+                pdata = pdata + ',{}={}'.format(key,process_special_char(val))
+            else:
+                nonstringpdata = nonstringpdata + '{}={},'.format(key,val)
+        elif key == 'alarmAdditionalInformation':
+            for key2,val2 in val.items():
+                if val2 != "" and isinstance(val2, str):
+                    pdata = pdata + ',{}={}'.format(key2,process_special_char(val2))
+                elif val2 != "" :
+                    nonstringpdata = nonstringpdata + '{}={},'.format(key2,val2)
+
+    send_to_influxdb(domain, pdata + nonstringpdata[:-1] + ' ' + process_time (eventTimestamp))
+
+def process_heartbeat_events(domain, jobj, pdata, nonstringpdata):
+    pdata = pdata +",system={}".format(source)
+    for key,val in jobj.items():
+        if key != 'additionalFields' and val != "" :
+            if isinstance(val, str):
+                pdata = pdata + ',{}={}'.format(key,process_special_char(val))
+            else:
+                nonstringpdata = nonstringpdata + '{}={},'.format(key,val)
+        elif key == 'additionalFields':
+            for key2,val2 in val.items():
+                if val2 != "" and isinstance(val2, str):
+                    pdata = pdata + ',{}={}'.format(key2,process_special_char(val2))
+                elif val2 != "" :
+                    nonstringpdata = nonstringpdata + '{}={},'.format(key2,val2)
+
+    send_to_influxdb(domain, pdata + nonstringpdata[:-1] + ' ' + process_time (eventTimestamp))
+
+def process_measurement_events(domain, jobj, pdata, nonstringpdata, eventId, startEpochMicrosec, lastEpochMicrosec):
+    pdata = pdata +",system={}".format(source)
+    for key,val in jobj.items():
+        if val != "" :
+            if isinstance(val, str):
+                pdata = pdata + ',{}={}'.format(key,process_special_char(val))
+            elif isinstance(val, list):
+                if key == 'additionalMeasurements':
+                    process_additional_measurements(val, domain + "additionalmeasurements", eventId, startEpochMicrosec, lastEpochMicrosec)
+                elif key == 'cpuUsageArray':
+                    process_nonadditional_measurements(val, domain + "cpuusage", eventId, startEpochMicrosec, lastEpochMicrosec)
+                elif key == 'diskUsageArray':
+                    process_nonadditional_measurements(val, domain + "diskusage", eventId, startEpochMicrosec, lastEpochMicrosec)
+                elif key == 'memoryUsageArray':
+                    process_nonadditional_measurements(val, domain + "memoryusage", eventId, startEpochMicrosec, lastEpochMicrosec)
+                elif key == 'nicPerformanceArray':
+                    process_nonadditional_measurements(val, domain + "nicperformance", eventId, startEpochMicrosec, lastEpochMicrosec)
+                elif key == 'loadArray':
+                    process_nonadditional_measurements(val, domain + "load", eventId, startEpochMicrosec, lastEpochMicrosec)
+            elif isinstance(val, dict):
+                for key2,val2 in val.items():
+                    if isinstance(val2, str):
+                        pdata = pdata + ',{}={}'.format(key2,process_special_char(val2))
+                    else:
+                        nonstringpdata = nonstringpdata + '{}={},'.format(key2,val2)
+            else:
+                nonstringpdata = nonstringpdata + '{}={},'.format(key,val)
+
+    send_to_influxdb(domain, pdata + nonstringpdata[:-1] + ' ' + process_time (eventTimestamp))
+
+def process_special_char(str):
+    for search_char, replace_char in {" ":"\ ", ",":"\," }.items():
+        str = str.replace(search_char, replace_char)
+    return str
+
+def process_time(eventTimestamp):
+    eventTimestamp = str(eventTimestamp).replace(".", "")
+    while len(eventTimestamp) < 19:
+        eventTimestamp = eventTimestamp + "0"
+    return format(int(eventTimestamp))
 
 #--------------------------------------------------------------------------
 # Save event data
 #--------------------------------------------------------------------------
 def save_event_in_db(body):
-  jobj = json.loads(body)
-  e = json.loads(body, object_hook=JSONObject)
+    jobj = json.loads(body)
+    e = json.loads(body, object_hook=JSONObject)
+    global source
+    global eventTimestamp
+    source = "unknown"
 
-  domain = jobj['event']['commonEventHeader']['domain']
-  timestamp = jobj['event']['commonEventHeader']['lastEpochMicrosec']
-  agent = jobj['event']['commonEventHeader']['reportingEntityName'].upper(    )
-  if "LOCALHOST" in agent:
-    agent = "computehost"
-  source = jobj['event']['commonEventHeader']['sourceId'].upper(    )
+    domain = jobj['event']['commonEventHeader']['domain']
+    eventTimestamp = jobj['event']['commonEventHeader']['startEpochMicrosec']
+    agent = jobj['event']['commonEventHeader']['reportingEntityName'].upper()
+    if "LOCALHOST" in agent:
+        agent = "computehost"
+        source = jobj['event']['commonEventHeader']['sourceId'].upper()
 
- ###################################################
-  
-  ## processing common header part
-  pdata = domain
-  commonHeaderObj = jobj['event']['commonEventHeader'].items()
-  for key,val in commonHeaderObj:
-     if val != "" :
-      pdata = pdata + ',{}={}'.format(key,val)
+    ## processing common header part
+    pdata = domain
+   
+    nonstringpdata = " "
+    commonHeaderObj = jobj['event']['commonEventHeader'].items()
+    for key,val in commonHeaderObj:
+        if val != "" :
+            if (key != 'internalHeaderFields'):
+                if isinstance(val, str):
+                    pdata = pdata + ',{}={}'.format(key,process_special_char(val))
+                else:
+                    nonstringpdata = nonstringpdata + '{}={}'.format(key,val) + ','
+            if (key == 'internalHeaderFields'):
+                for key2,val2 in val.items():
+                    if val2 != "" :
+                        if isinstance(val2, str):
+                            pdata = pdata + ',{}={}'.format(key2,process_special_char(val2))
+                        else:
+                            nonstringpdata = nonstringpdata + '{}={}'.format(key2,val2) + ','
 
-  ## processing pnfRegistration events
-  if 'pnfRegistrationFields' in jobj['event']:
-    print('Found pnfRegistrationFields')
+    ## processing pnfRegistration events
+    if 'pnfRegistrationFields' in jobj['event']:
+        logger.debug('Found pnfRegistrationFields')
+        process_pnfRegistration_event(domain, jobj['event']['pnfRegistrationFields'], pdata, nonstringpdata)
 
-    d = jobj['event']['pnfRegistrationFields'].items()
-    for key,val in d:
-      if key != 'additionalFields'and val != "" :
-        pdata = pdata + ',{}={}'.format(key,val.replace(' ','-'))
+    ## processing thresholdCrossingAlert events 
+    if 'thresholdCrossingAlertFields' in jobj['event']:
+        logger.debug('Found thresholdCrossingAlertFields')
+        process_thresholdCrossingAlert_event(domain, jobj['event']['thresholdCrossingAlertFields'], pdata, nonstringpdata)
 
-    if 'additionalFields' in jobj['event']['pnfRegistrationFields']:
-      d = jobj['event']['pnfRegistrationFields']['additionalFields'].items()
-      stringKey = ["username","password","protocol"]
-      nonstringKey = ["betweenAttemptsTimeout","connectionTimeout","keepaliveDelay","maxConnectionAttempts", "oamPort","reconnectOnChangedSchema","sleep-factor","tcpOnly"]
+    ## processing fault events
+    if 'faultFields' in jobj['event']:
+        logger.debug('Found faultFields')
+        process_fault_event(domain, jobj['event']['faultFields'], pdata, nonstringpdata)
 
-      for key,val in d:
-        for strKey in stringKey:
-          if key == strKey and val != "" :
-            pdata = pdata + ',{}={}'.format(key,val.replace(' ','-'))
+    ##process heartbeat events  
+    if 'heartbeatFields' in jobj['event']:
+        logger.debug('Found Heartbeat')
+        process_heartbeat_events(domain, jobj['event']['heartbeatFields'], pdata, nonstringpdata)
 
-      pdata = pdata + ' '
-      for key,val in d:
-        for nonstrKey in nonstringKey:
-           if key == nonstrKey:
-             pdata = pdata + '{}={}'.format(key,val) + ','
+    ## processing measurement events
+    if 'measurementFields' in jobj['event']:
+        logger.debug('Found measurementFields')
+        process_measurement_events(domain, jobj['event']['measurementFields'], pdata, nonstringpdata, jobj['event']['commonEventHeader']['eventId'], 
+                                       jobj['event']['commonEventHeader']['startEpochMicrosec'], jobj['event']['commonEventHeader']['lastEpochMicrosec'])
 
-    send_to_influxdb("pnf", pdata[:-1])
-
-
-  ## processing thresholdCrossingAlert events 
-  if 'thresholdCrossingAlertFields' in jobj['event']:
-    print('Found thresholdCrossingAlertFields')
-      
-    d = jobj['event']['thresholdCrossingAlertFields'].items()
-    stringKey = ["alertAction","alertDescription","alertType","alertValue","dataCollector","elementType","eventSeverity",
-    "interfaceName","networkService","possibleRootCause","collectionTimestamp","eventStartTimestamp"]
-    addstringKey = ["equipType","eventTime","model","vendor"]
-    nonstringKey = ["thresholdCrossingFieldsVersion"]
-
-    for key,val in d:
-      for strKey in stringKey:
-        if key == strKey and val != "" :
-          if key != "collectionTimestamp" or key != "eventStartTimestamp" :
-            pdata = pdata + ',{}={}'.format(key,val.replace(' ','-'))
-
-    if 'additionalParameters' in jobj['event']['thresholdCrossingAlertFields']:
-     for addParameter in jobj['event']['thresholdCrossingAlertFields']["additionalParameters"]:
-       for key,val in addParameter.items():
-         if key != "hashMap" :
-           pdata = pdata + ',{}={}'.format(key,val.replace(' ','-'))
-         elif key == "hashMap" :
-           for key,val in val.items(): 
-             pdata = pdata + ',{}={}'.format(key,val.replace(' ','-'))
-
-    if 'additionalFields' in jobj['event']['thresholdCrossingAlertFields']:
-     addInfo = jobj['event']['thresholdCrossingAlertFields']["additionalFields"].items()
-     for key,val in addInfo:
-       for strKey in addstringKey:
-         if key == strKey and val != "" :
-           if key != 'eventTime' :
-             pdata = pdata + ',{}={}'.format(key,val.replace(' ','-'))
-
-    pdata = pdata + ' '
-    for key,val in d:
-      for nonstrKey in nonstringKey:
-        if key == nonstrKey:
-          pdata = pdata + '{}={}'.format(key,val) + ','
-
-    send_to_influxdb("thresholdCrossingAlert", pdata[:-1])
-
-  ## processing fault events
-  if 'faultFields' in jobj['event']:
-    print('Found faultFields')
-      
-    d = jobj['event']['faultFields'].items()
-    stringKey = ["alarmCondition","alarmInterfaceA","eventSeverity","eventSourceType","specificProblem","vfStatus"]
-    addstringKey = ["equipType","model","vendor","eventTime"]
-    nonstringKey = ["faultFieldsVersion"]
-
-    for key,val in d:
-      for strKey in stringKey:
-        if key == strKey and val != "" :
-          pdata = pdata + ',{}={}'.format(key,val.replace(' ','-'))
-
-    if 'alarmAdditionalInformation' in jobj['event']['faultFields']:
-     addInfo = jobj['event']['faultFields']["alarmAdditionalInformation"].items()
-     for key,val in addInfo:
-       for strKey in addstringKey:
-         if key == strKey and val != "" :
-           if key != 'eventTime' :
-             pdata = pdata + ',{}={}'.format(key,val.replace(' ','-'))
-
-    pdata = pdata + ' '
-    for key,val in d:
-      for nonstrKey in nonstringKey:
-        if key == nonstrKey:
-          pdata = pdata + '{}={}'.format(key,val) + ','
-
-    send_to_influxdb("fault", pdata[:-1])
-
-  ###process heartbeat events  
-  if 'heartbeatFields' in jobj['event']:
-    print('Found Heartbeat')
-
-    d = jobj['event']['heartbeatFields'].items()
-    nonstringKey = ["heartbeatFieldsVersion","heartbeatInterval"]
-    
-    if 'additionalFields' in jobj['event']['heartbeatFields']:
-     addInfo = jobj['event']['heartbeatFields']["additionalFields"].items()
-     for key,val in addInfo:
-       if key != 'eventTime' :
-         pdata = pdata + ',{}={}'.format(key,val.replace(' ','-'))
-
-    pdata = pdata + ' '
-    for key,val in d:
-      for nonstrKey in nonstringKey:
-        if key == nonstrKey:
-          pdata = pdata + '{}={}'.format(key,val) + ',' 
-
-    send_to_influxdb("heartbeat", pdata[:-1])
-
-  ## processing measurement events
-  if 'measurementFields' in jobj['event']:
-    print('Found measurementFields')
-
-    d = jobj['event']['measurementFields'].items()
-    nonstringKey = ["concurrentSessions","configuredEntities","meanRequestLatency","measurementFieldsVersion","measurementInterval",
-    "nfcScalingMetric","numberOfMediaPortsInUse","requestRate"]
-
-    pdata = pdata + ' '
-    for key,val in d:
-      for nonstrKey in nonstringKey:
-        if key == nonstrKey: 
-          pdata = pdata + '{}={}'.format(key,val) + ','
-
-    send_to_influxdb("fault", pdata[:-1])  
-
-#######################################
-
-  if 'measurementsForVfScalingFields' in jobj['event']:
-    print('Found measurementsForVfScalingFields')
-
-#        "measurementsForVfScalingFields": {
-#            "additionalMeasurements": [
-#                {
-#                    "arrayOfFields": [
-#                        {
-#                            "name": "load-longterm",
-#                            "value": "0.34"
-#                        },
-#                        {
-#                            "name": "load-shortterm",
-#                            "value": "0.32"
-#                        },
-#                        {
-#                            "name": "load-midterm",
-#                            "value": "0.34"
-#                        }
-#                    ],
-#                    "name": "load"
-#                }
-#            ],
-
-    if 'additionalMeasurements' in jobj['event']['measurementsForVfScalingFields']:
-      for meas in jobj['event']['measurementsForVfScalingFields']['additionalMeasurements']:
-        name = meas['name']
-        eventTime = int(float(meas['eventTime']) * float(1000000000)) 
-
-        if name =="kernel4-filterAccounting":
-            data = '{},system={}'.format(name,source)
-            for field in meas['arrayOfFields']:
-               if field['name'] =="ipt-packets-value":
-                 val=field['value']
-               else:
-                 data =data + ",{}={}".format(field['name'],field['value'])
-       
-            data = data + ' ' + "ipt-packets-value=" + val + ' ' + format(eventTime)          
-            send_to_influxdb("iptables", data)
-        else:
-            pdata = '{},system={}'.format(name,source)
-        
-            for field in meas['arrayOfFields']:
-              pdata = pdata + ",{}={}".format(field['name'],field['value'])
-            #pdata = pdata + ",{}={}".format("eventTime",meas['eventTime'])
-            i=pdata.find(',', pdata.find('system'))
-            pdata = pdata[:i] + ' ' + pdata[i+1:] + ' ' + format(eventTime)
-            send_to_influxdb("systemLoad", pdata)      
-#            "cpuUsageArray": [
-#                {
-#                    "cpuIdentifier": "15",
-#                    "cpuIdle": 99.8998998999,
-#                    "cpuUsageInterrupt": 0,
-#                    "cpuUsageNice": 0,
-#                    "cpuUsageSoftIrq": 0,
-#                    "cpuUsageSteal": 0,
-#                    "cpuUsageSystem": 0,
-#                    "cpuUsageUser": 0.1001001001,
-#                    "cpuWait": 0,
-#                    "percentUsage": 0.0
-#                },
-
-    if 'cpuUsageArray' in jobj['event']['measurementsForVfScalingFields']:
-      print('Found cpuUsageArray')
-      for disk in jobj['event']['measurementsForVfScalingFields']['cpuUsageArray']:
-        id=disk['cpuIdentifier']
-        pdata = 'cpuUsage,system={},cpu={}'.format(source,id)
-        d = disk.items()
-        for key,val in d:
-          if key == 'eventTime':
-            eventTime = int(float(val) * float(1000000000)) 
-          elif key != 'cpuIdentifier':                         
-            pdata = pdata + ',{}={}'.format(key,val)
-        i=pdata.find(',', pdata.find('cpu='))
-        pdata = pdata[:i] + ' ' + pdata[i+1:] + ' ' + format(eventTime)
-        send_to_influxdb("cpuUsage", pdata)
-
-#            "diskUsageArray": [
-#                {
-#                    "diskIdentifier": "sda",
-#                    "diskIoTimeLast": 0.3996139893,
-#                    "diskMergedReadLast": 0,
-#                    "diskMergedWriteLast": 26.1747155344,
-#                    "diskOctetsReadLast": 0,
-#                    "diskOctetsWriteLast": 309767.93302,
-#                    "diskOpsReadLast": 0,
-#                    "diskOpsWriteLast": 10.9893839563,
-#                    "diskTimeReadLast": 0,
-#                    "diskTimeWriteLast": 0.699324445683
-#                },
-
-    if 'diskUsageArray' in jobj['event']['measurementsForVfScalingFields']:
-      print('Found diskUsageArray')
-      for disk in jobj['event']['measurementsForVfScalingFields']['diskUsageArray']:
-        id=disk['diskIdentifier']
-        pdata = 'diskUsage,system={},disk={}'.format(source,id)
-        d = disk.items()
-        for key,val in d:
-          if key == 'eventTime':
-            eventTime = int(float(val) * float(1000000000))
-          elif key != 'diskIdentifier':        
-            pdata = pdata + ',{}={}'.format(key,val)
-        i=pdata.find(',', pdata.find('disk='))
-        pdata = pdata[:i] + ' ' + pdata[i+1:] + ' ' + format(eventTime)
-        send_to_influxdb("diskUsage", pdata)
-
-#            "memoryUsageArray": [
-#                {
-#                    "memoryBuffered": 269056.0,
-#                    "memoryCached": 17636956.0,
-#                    "memoryFree": 244731658240,
-#                    "memorySlabRecl": 753160.0,
-#                    "memorySlabUnrecl": 210800.0,
-#                    "memoryUsed": 6240064.0,
-#                    "vmIdentifier": "opnfv01"
-#                }
-#            ],
-
-    if 'memoryUsageArray' in jobj['event']['measurementsForVfScalingFields']:
-      print('Found memoryUsageArray')
-      pdata = 'memoryUsage,system={}'.format(source)
-      vmid=e.event.measurementsForVfScalingFields.memoryUsageArray[0].vmIdentifier
-      d = jobj['event']['measurementsForVfScalingFields']['memoryUsageArray'][0].items()
-      for key,val in d:
-        if key == 'eventTime':
-          eventTime = int(float(val) * float(1000000000))  
-        elif key != 'vmIdentifier':                  
-          pdata = pdata + ',{}={}'.format(key,val)
-      i=pdata.find(',', pdata.find('system'))
-      pdata = pdata[:i] + ' ' + pdata[i+1:] + ' ' + format(eventTime)
-      send_to_influxdb("memoryUsage", pdata)
-
-#            "vNicPerformanceArray": [
-#                {
-#                    "receivedDiscardedPacketsAccumulated": 0,
-#                    "receivedErrorPacketsAccumulated": 0,
-#                    "receivedOctetsAccumulated": 476.801524578,
-#                    "receivedTotalPacketsAccumulated": 2.90000899705,
-#                    "transmittedDiscardedPacketsAccumulated": 0,
-#                    "transmittedErrorPacketsAccumulated": 0,
-#                    "transmittedOctetsAccumulated": 230.100735749,
-#                    "transmittedTotalPacketsAccumulated": 1.20000372292,
-#                    "vNicIdentifier": "eno4",
-#                    "valuesAreSuspect": "true"
-#                },
-
-    if 'vNicPerformanceArray' in jobj['event']['measurementsForVfScalingFields']:
-      print('Found vNicPerformanceArray')
-      for vnic in jobj['event']['measurementsForVfScalingFields']['vNicPerformanceArray']:
-        vnid=vnic['vNicIdentifier']
-        pdata = 'vNicPerformance,system={},vnic={}'.format(vmid,vnid)
-        d = vnic.items()
-        for key,val in d:
-          if key == 'eventTime':
-            eventTime = int(float(val) * float(1000000000))   
-          elif key != 'vNicIdentifier':           
-            pdata = pdata + ',{}={}'.format(key,val)
-        i=pdata.find(',', pdata.find('vnic'))
-        pdata = pdata[:i] + ' ' + pdata[i+1:] + ' ' + format(eventTime)
-        send_to_influxdb("vNicPerformance", pdata)
 
 def test_listener(environ, start_response, schema):
     '''
@@ -583,8 +516,8 @@ def test_listener(environ, start_response, schema):
     '''
     global pending_command_list
     logger.info('Got a Test Control input')
-    print('============================')
-    print('==== TEST CONTROL INPUT ====')
+    logger.info('============================')
+    logger.info('==== TEST CONTROL INPUT ====')
 
     #--------------------------------------------------------------------------
     # GET allows us to get the current pending request.
@@ -612,7 +545,7 @@ def test_listener(environ, start_response, schema):
             decoded_body = json.loads(body)
             jsonschema.validate(decoded_body, schema)
             logger.info('TestControl is valid!')
-            print('TestControl:\n'
+            logger.info('TestControl:\n'
                   '{0}'.format(json.dumps(decoded_body,
                                           sort_keys=True,
                                           indent=4,
@@ -620,12 +553,10 @@ def test_listener(environ, start_response, schema):
 
         except jsonschema.SchemaError as e:
             logger.error('TestControl Schema is not valid: {0}'.format(e))
-            print('TestControl Schema is not valid: {0}'.format(e))
 
         except jsonschema.ValidationError as e:
             logger.warn('TestControl input not valid: {0}'.format(e))
-            print('TestControl input not valid: {0}'.format(e))
-            print('Bad JSON body decoded:\n'
+            logger.warn('Bad JSON body decoded:\n'
                   '{0}'.format(json.dumps(decoded_body,
                                           sort_keys=True,
                                           indent=4,
@@ -633,12 +564,11 @@ def test_listener(environ, start_response, schema):
 
         except Exception as e:
             logger.error('TestControl input not valid: {0}'.format(e))
-            print('TestControl Schema not valid: {0}'.format(e))
     else:
         logger.debug('Missing schema just decode JSON: {0}'.format(body))
         try:
             decoded_body = json.loads(body)
-            print('Valid JSON body (no schema checking) decoded:\n'
+            logger.info('Valid JSON body (no schema checking) decoded:\n'
                   '{0}'.format(json.dumps(decoded_body,
                                           sort_keys=True,
                                           indent=4,
@@ -647,15 +577,14 @@ def test_listener(environ, start_response, schema):
 
         except Exception as e:
             logger.error('TestControl input not valid: {0}'.format(e))
-            print('TestControl input not valid: {0}'.format(e))
 
     #--------------------------------------------------------------------------
     # Respond to the caller. If we received otherField 'ThrottleRequest',
     # generate the appropriate canned response.
     #--------------------------------------------------------------------------
     pending_command_list = decoded_body
-    print('===== TEST CONTROL END =====')
-    print('============================')
+    logger.info('===== TEST CONTROL END =====')
+    logger.info('============================')
     start_response('202 Accepted', [])
     yield ''
 
@@ -801,10 +730,9 @@ USAGE
         # Finally we have enough info to start a proper flow trace.
         #----------------------------------------------------------------------
         global logger
-        print('Logfile: {0}'.format(log_file))
         logger = logging.getLogger('monitor')
         if ((verbose is not None) and (verbose > 0)):
-            print('Verbose mode on')
+            logger.info('Verbose mode on')
             logger.setLevel(logging.DEBUG)
         else:
             logger.setLevel(logging.INFO)
@@ -937,7 +865,7 @@ USAGE
         dispatcher.register('GET', test_control_url, test_control_listener)
 
         httpd = make_server('', int(vel_port), dispatcher)
-        print('Serving on port {0}...'.format(vel_port))
+        logger.info('Serving on port {0}...'.format(vel_port))
         httpd.serve_forever()
 
         logger.error('Main loop exited unexpectedly!')

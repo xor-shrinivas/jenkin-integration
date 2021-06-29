@@ -11,10 +11,10 @@
 #grafana -- Read the events written by ves-collector in influxdb and show the graphs on UI
 #influxdb -- Store the events in DB sent by ves-agent
 #kafdrop -- UI for Kafka
-#this is new comment
+
 
 #Port allotment on host system for the micro services running in docker.
-#adding this for testing
+
 #influx port 3330
 #grafana port 8880
 #kafka port 9091
@@ -167,23 +167,23 @@ echo ""
 echo -e "--------------------------------------------------------------------\n"
 # Commented out till ves-agent is upgraded to v7 type events.
 #Spin ves agent container.
-#echo -e "Starting ves agent container. Please wait\n" 
-#docker run -d -e ves_kafka_host=$local_ip \
-#       -e ves_kafka_hostname='mykafka' -e ves_host=$local_ip \
-#       -e ves_port=$vel_ves_port -e ves_path='' \
-#       -e ves_topic='events' -e ves_https='False' -e ves_user='user' \
-#       -e ves_pass='password' -e ves_interval='10' \
-#       -e ves_kafka_port=$kafka_port -e ves_mode='./yaml/host' \
-#       -e ves_version='5' -e ves_loglevel='DEBUG' ves-agent
-#if [ $? != 0 ]
-#then
-#    exit 1
-#fi
-#sleep 5
-#echo "Done."
-#echo ""
-#echo -e "--------------------------------------------------------------------\n"
-#echo""
+echo -e "Starting ves agent container. Please wait\n" 
+docker run -d -e ves_kafka_host=$local_ip \
+       -e ves_kafka_hostname='mykafka' -e ves_host=$local_ip \
+       -e ves_port=$vel_ves_port -e ves_path='' \
+       -e ves_topic='events' -e ves_https='False' -e ves_user='user' \
+       -e ves_pass='password' -e ves_interval='10' \
+       -e ves_kafka_port=$kafka_port -e ves_mode='./yaml/host' \
+       -e ves_version='7' -e ves_loglevel='DEBUG' ves-agent
+if [ $? != 0 ]
+then
+    exit 1
+fi
+sleep 5
+echo "Done."
+echo ""
+echo -e "--------------------------------------------------------------------\n"
+echo""
 echo -e "ves stack summary\n"
 
 #**WARNIG**Uncooment this results removal off all container images thore are not in running state ***
